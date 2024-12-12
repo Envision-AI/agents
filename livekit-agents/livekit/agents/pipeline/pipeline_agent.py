@@ -131,6 +131,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
     MIN_TIME_PLAYED_FOR_COMMIT = 1.5
     """Minimum time played for the user speech to be committed to the chat context"""
 
+    text_only: bool = False
+
     def __init__(
         self,
         *,
@@ -138,6 +140,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         stt: stt.STT,
         llm: LLM,
         tts: tts.TTS,
+        text_only: bool = False,
         chat_ctx: ChatContext | None = None,
         fnc_ctx: FunctionContext | None = None,
         allow_interruptions: bool = True,
@@ -185,6 +188,7 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """
         super().__init__()
         self._loop = loop or asyncio.get_event_loop()
+        self.text_only = text_only
 
         if will_synthesize_assistant_reply is not None:
             logger.warning(
@@ -328,6 +332,138 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         """
         return super().on(event, callback)
 
+    async def _play_text(self, source) -> None:
+
+        interrupted = False
+
+        if isinstance(source, LLMStream):
+            print("toool")
+            print(await self._llm_stream_have_tool(source))
+
+        collected_text = ""
+        is_using_tools = isinstance(source, LLMStream) and len(source.function_calls)
+
+        print("Play text is happening2 ....")
+
+        extra_tools_messages = (
+            []
+        )  # additional messages from the functions to add to the context if needed
+        print(f"extra_tools_messages {extra_tools_messages}")
+        # if the answer is using tools, execute the functions and automatically generate
+        # a response to the user question from the returned values
+
+        print("Play text is happening3 ....")
+        print(is_using_tools)
+
+        if is_using_tools and not interrupted:
+            assert isinstance(source, LLMStream)
+
+            print("Play text is happening4 ....")
+
+            # execute functions
+            called_fncs_info = source.function_calls
+
+            print("Play text is happening5 ....")
+            print(called_fncs_info)
+
+            called_fncs = []
+            for fnc in called_fncs_info:
+                called_fnc = fnc.execute()
+                called_fncs.append(called_fnc)
+                logger.debug(
+                    "executing ai function",
+                    extra={
+                        "function": fnc.function_info.name,
+                    },
+                )
+                try:
+                    await called_fnc.task
+                except Exception:
+                    print("something went wrong with the request!!!")
+                    pass
+
+            tool_calls = []
+            tool_calls_results_msg = []
+
+            for called_fnc in called_fncs:
+                # ignore the function calls that returns None
+                print(called_fnc)
+                if called_fnc.result is None:
+                    continue
+
+                print(f"***********************")
+                print(f"Result: {called_fnc.result}")
+
+                tool_calls.append(called_fnc.call_info)
+                tool_calls_results_msg.append(
+                    ChatMessage.create_tool_from_called_function(called_fnc)
+                )
+
+            if tool_calls:
+                print("tool_calls")
+                extra_tools_messages.append(
+                    ChatMessage.create_tool_calls(tool_calls, text=collected_text)
+                )
+                extra_tools_messages.extend(tool_calls_results_msg)
+
+                chat_ctx = self.chat_ctx
+                chat_ctx.messages.extend(extra_tools_messages)
+
+                answer_llm_stream = self._llm.chat(
+                    chat_ctx=chat_ctx,
+                    fnc_ctx=self._fnc_ctx,
+                )
+
+                chatManager = rtc.ChatManager(self._room)
+                chatMessage = await chatManager.send_message("")
+
+                async for chunk in answer_llm_stream:
+                    content = chunk.choices[0].delta.content
+
+                    if content != None:
+                        print(content)
+
+                        chatMessage.message = chatMessage.message + content
+                        await chatManager.update_message(chatMessage)
+
+                # answer_synthesis = self._synthesize_agent_speech(
+                #     speech_handle.id, answer_llm_stream
+                # )
+                # replace the synthesis handle with the new one to allow interruption
+                # speech_handle.synthesis_handle = answer_synthesis
+                # play_handle = answer_synthesis.play()
+                # await play_handle.join()
+
+                collected_text = "this is awnser!!!!!!"
+                interrupted = False
+        else:
+            chatManager = rtc.ChatManager(self._room)
+            chatMessage = await chatManager.send_message("")
+
+            if isinstance(source, str):
+                chatMessage.message = chatMessage.message + source
+                await chatManager.update_message(chatMessage)
+                return
+
+            if isinstance(source, LLMStream):
+                print("convert source")
+                source2 = _llm_stream_to_str_iterable("as", source)
+                print(source2)
+                async for chunk in source2:
+                    chatMessage.message = chatMessage.message + chunk
+                    await chatManager.update_message(chatMessage)
+
+    async def _llm_stream_have_tool(self, stream: LLMStream) -> list:
+        funlist = []
+        async for chunk in stream:
+            tools = chunk.choices[0].delta.tool_calls
+            content = chunk.choices[0].delta.content  # Fix the variable name here
+            if content is not None:
+                funlist.append({"content": content, "tools": tools})
+                break
+
+        return funlist
+
     async def say(
         self,
         source: str | LLMStream | AsyncIterable[str],
@@ -335,23 +471,27 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         allow_interruptions: bool = True,
         add_to_chat_ctx: bool = True,
     ) -> None:
-        """
-        Play a speech source through the voice assistant.
 
-        Args:
-            source: The source of the speech to play.
-                It can be a string, an LLMStream, or an asynchronous iterable of strings.
-            allow_interruptions: Whether to allow interruptions during the speech playback.
-            add_to_chat_ctx: Whether to add the speech to the chat context.
-        """
-        await self._track_published_fut
+        if self.text_only:
+            await self._play_text(source=source)
+        else:
+            """
+            Play a speech source through the voice assistant.
 
-        new_handle = SpeechHandle.create_assistant_speech(
-            allow_interruptions=allow_interruptions, add_to_chat_ctx=add_to_chat_ctx
-        )
-        synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
-        new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
-        self._add_speech_for_playout(new_handle)
+            Args:
+                source: The source of the speech to play.
+                    It can be a string, an LLMStream, or an asynchronous iterable of strings.
+                allow_interruptions: Whether to allow interruptions during the speech playback.
+                add_to_chat_ctx: Whether to add the speech to the chat context.
+            """
+            await self._track_published_fut
+
+            new_handle = SpeechHandle.create_assistant_speech(
+                allow_interruptions=allow_interruptions, add_to_chat_ctx=add_to_chat_ctx
+            )
+            synthesis_handle = self._synthesize_agent_speech(new_handle.id, source)
+            new_handle.initialize(source=source, synthesis_handle=synthesis_handle)
+            self._add_speech_for_playout(new_handle)
 
     def _update_state(self, state: AgentState, delay: float = 0.0):
         """Set the current state of the agent"""
@@ -668,7 +808,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             speech_handle.source.function_calls
         )
 
-        extra_tools_messages = []  # additional messages from the functions to add to the context if needed
+        extra_tools_messages = (
+            []
+        )  # additional messages from the functions to add to the context if needed
 
         # if the answer is using tools, execute the functions and automatically generate
         # a response to the user question from the returned values
