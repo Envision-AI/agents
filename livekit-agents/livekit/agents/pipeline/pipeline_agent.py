@@ -337,34 +337,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
         interrupted = False
 
         if isinstance(source, LLMStream):
-            print("toool")
-            print(await self._llm_stream_have_tool(source))
+            await self._llm_stream_have_tool(source)
 
         collected_text = ""
         is_using_tools = isinstance(source, LLMStream) and len(source.function_calls)
 
-        print("Play text is happening2 ....")
-
-        extra_tools_messages = (
-            []
-        )  # additional messages from the functions to add to the context if needed
-        print(f"extra_tools_messages {extra_tools_messages}")
+        extra_tools_messages = []
+        # additional messages from the functions to add to the context if needed
         # if the answer is using tools, execute the functions and automatically generate
         # a response to the user question from the returned values
-
-        print("Play text is happening3 ....")
-        print(is_using_tools)
 
         if is_using_tools and not interrupted:
             assert isinstance(source, LLMStream)
 
-            print("Play text is happening4 ....")
-
             # execute functions
             called_fncs_info = source.function_calls
-
-            print("Play text is happening5 ....")
-            print(called_fncs_info)
 
             called_fncs = []
             for fnc in called_fncs_info:
@@ -379,7 +366,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 try:
                     await called_fnc.task
                 except Exception:
-                    print("something went wrong with the request!!!")
                     pass
 
             tool_calls = []
@@ -387,12 +373,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
 
             for called_fnc in called_fncs:
                 # ignore the function calls that returns None
-                print(called_fnc)
                 if called_fnc.result is None:
                     continue
-
-                print(f"***********************")
-                print(f"Result: {called_fnc.result}")
 
                 tool_calls.append(called_fnc.call_info)
                 tool_calls_results_msg.append(
@@ -400,7 +382,6 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 )
 
             if tool_calls:
-                print("tool_calls")
                 extra_tools_messages.append(
                     ChatMessage.create_tool_calls(tool_calls, text=collected_text)
                 )
@@ -421,20 +402,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                     content = chunk.choices[0].delta.content
 
                     if content != None:
-                        print(content)
-
                         chatMessage.message = chatMessage.message + content
                         await chatManager.update_message(chatMessage)
 
-                # answer_synthesis = self._synthesize_agent_speech(
-                #     speech_handle.id, answer_llm_stream
-                # )
-                # replace the synthesis handle with the new one to allow interruption
-                # speech_handle.synthesis_handle = answer_synthesis
-                # play_handle = answer_synthesis.play()
-                # await play_handle.join()
-
-                collected_text = "this is awnser!!!!!!"
                 interrupted = False
         else:
             chatManager = rtc.ChatManager(self._room)
@@ -446,23 +416,21 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 return
 
             if isinstance(source, LLMStream):
-                print("convert source")
                 source2 = _llm_stream_to_str_iterable("as", source)
-                print(source2)
                 async for chunk in source2:
                     chatMessage.message = chatMessage.message + chunk
                     await chatManager.update_message(chatMessage)
 
     async def _llm_stream_have_tool(self, stream: LLMStream) -> list:
-        funlist = []
+        listOfItems = []
         async for chunk in stream:
             tools = chunk.choices[0].delta.tool_calls
             content = chunk.choices[0].delta.content  # Fix the variable name here
             if content is not None:
-                funlist.append({"content": content, "tools": tools})
+                listOfItems.append({"content": content, "tools": tools})
                 break
 
-        return funlist
+        return listOfItems
 
     async def say(
         self,
