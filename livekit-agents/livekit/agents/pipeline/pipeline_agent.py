@@ -353,6 +353,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
             # execute functions
             called_fncs_info = source.function_calls
 
+            self.emit("function_calls_collected", source.function_calls)
+
             called_fncs = []
             for fnc in called_fncs_info:
                 called_fnc = fnc.execute()
