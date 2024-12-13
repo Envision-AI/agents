@@ -368,6 +368,8 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 except Exception:
                     pass
 
+            self.emit("function_calls_finished", called_fncs)
+
             tool_calls = []
             tool_calls_results_msg = []
 
