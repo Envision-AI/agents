@@ -409,13 +409,16 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                         chatMessage.message = chatMessage.message + content
                         await chatManager.update_message(chatMessage)
 
+                chatMessage.message = chatMessage.message + content + "\x03"
+                await chatManager.update_message(chatMessage)
+
                 interrupted = False
         else:
             chatManager = rtc.ChatManager(self._room)
             chatMessage = await chatManager.send_message("")
 
             if isinstance(source, str):
-                chatMessage.message = chatMessage.message + source
+                chatMessage.message = chatMessage.message + source + "\x03"
                 await chatManager.update_message(chatMessage)
                 return
 
@@ -424,6 +427,9 @@ class VoicePipelineAgent(utils.EventEmitter[EventTypes]):
                 async for chunk in source2:
                     chatMessage.message = chatMessage.message + chunk
                     await chatManager.update_message(chatMessage)
+
+                chatMessage.message = chatMessage.message + chunk + "\x03"
+                await chatManager.update_message(chatMessage)
 
     async def _llm_stream_have_tool(self, stream: LLMStream) -> list:
         listOfItems = []
